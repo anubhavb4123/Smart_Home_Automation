@@ -25,7 +25,10 @@ UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 SoftwareSerial Serial2(RX_PIN, TX_PIN);
 
 // ====== LED Indicator ======
-#define LED_PIN LED_BUILTIN  // NodeMCU LED (Active LOW)
+#define LED_BUILTIN  // NodeMCU LED (Active LOW)
+#define LED_PIN 15
+#define FAN_PIN 16
+#define SWITCH_PIN 17 
 
 // ====== Sensor Data (globals used across functions) ======
 String serialData = "";
@@ -51,8 +54,8 @@ std::map<String, String> guestNames;
 void setup() {
   Serial.begin(115200);
   Serial2.begin(9600); // from sensor board
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH); // LED OFF (active LOW)
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH); // LED OFF (active LOW)
 
   Serial.println("\n📶 Connecting to WiFi...");
   WiFi.mode(WIFI_STA);
@@ -61,9 +64,9 @@ void setup() {
 
   // LED blink while connecting
   while (WiFi.status() != WL_CONNECTED) {
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(LED_BUILTIN, LOW);
     delay(200);
-    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(LED_BUILTIN, HIGH);
     delay(200);
     Serial.print(".");
   }
@@ -72,7 +75,7 @@ void setup() {
   Serial.print("📡 IP: ");
   Serial.println(WiFi.localIP());
 
-  digitalWrite(LED_PIN, LOW); // LED ON (system running)
+  digitalWrite(LED_BUILTIN, LOW); // LED ON (system running)
   bot.sendMessage(ADMIN_CHAT_ID, "🚀 ESP8266 is online & ready!", "");
 }
 
@@ -121,7 +124,7 @@ void loop() {
   if (millis() - lastWiFiCheck > wifiCheckInterval) {
     if (WiFi.status() != WL_CONNECTED) {
       Serial.println("⚠️ WiFi Lost! Reconnecting...");
-      digitalWrite(LED_PIN, HIGH); // LED OFF while reconnecting
+      digitalWrite(LED_BUILTIN, HIGH); // LED OFF while reconnecting
       WiFi.begin(ssid, password);
       int retry = 0;
       while (WiFi.status() != WL_CONNECTED && retry < 20) {
@@ -132,7 +135,7 @@ void loop() {
       if (WiFi.status() == WL_CONNECTED) {
         Serial.println("\n✅ Reconnected!");
         bot.sendMessage(ADMIN_CHAT_ID, "🔁 WiFi reconnected!", "");
-        digitalWrite(LED_PIN, LOW); // LED ON
+        digitalWrite(LED_BUILTIN, LOW); // LED ON
       }
     }
     lastWiFiCheck = millis();
@@ -236,13 +239,29 @@ void processCommand(String chat_id, String text) {
     msg += "MQ135 -> Air Quality Value: " + String(mqVal) + "\n";
     bot.sendMessage(chat_id, msg, "Markdown");
   }
-  else if (text == "/on") {
+  else if (text == "/ledon") {
     digitalWrite(LED_PIN, LOW);
     bot.sendMessage(chat_id, "💡 LED *ON*", "Markdown");
   }
-  else if (text == "/off") {
+  else if (text == "/ledoff") {
     digitalWrite(LED_PIN, HIGH);
     bot.sendMessage(chat_id, "💡 LED *OFF*", "Markdown");
+  }
+  else if (text =="/fanon"){
+    digitalWrite(FAN_PIN,HIGH);
+    bot.sendMessage(chat_id, " Fan *ON*", "Markdown");
+  }
+  else if (text =="/fanoff"){
+    digitalWrite(FAN_PIN,LOW);
+    bot.sendMessage(chat_id, "Fan *OFF*", "Markdown");
+  }
+  else if (text =="/switchon"){
+    digitalWrite(SWITCH_PIN, HIGH);
+    bot.sendMessage(chat_id, " Switch *ON*", "Markdown")
+  }
+  else if (text =="/switchoff"){
+    digitalWrite(SWITCH_PIN,LOW);
+    bot.sendMessage(chat_id, "switch *OFF*", "Markdown")
   }
   else if (text == "/whoami") {
     if (chat_id == ADMIN_CHAT_ID)
@@ -256,8 +275,12 @@ void processCommand(String chat_id, String text) {
     bot.sendMessage(chat_id,
       "🤖 *Commands:*\n"
       "/status → Sensor data\n"
-      "/on → Turn LED on\n"
-      "/off → Turn LED off\n"
+      "/ledon → Turn LED on\n"
+      "/ledoff → Turn LED off\n"
+      "/fanon → Turn FAN on\n"
+      "/fanoff → Turn FAN off\n"
+      "/switchon → Turn SWITCH on\n"
+      "/switchoff → Turn SWITCH off\n"
       "/login pwd → Guest login\n"
       "/logout → Logout\n"
       "/whoami → Check role\n"
