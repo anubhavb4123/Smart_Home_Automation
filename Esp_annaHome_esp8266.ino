@@ -11,8 +11,8 @@
 const char* ssid = "BAJPAI_2.4Ghz";
 const char* password = "44444422";
 
-#define BOT_TOKEN "8001347460:AAEfxOg4j-1vmLdZ35qYabMqPJ52hSsK72E"
-#define ADMIN_CHAT_ID "1839775992"
+#define BOT_TOKEN "800134746"
+#define ADMIN_CHAT_ID "1592"
 #define LOGIN_PASSWORD "4123"
 
 // ====== Objects ======
