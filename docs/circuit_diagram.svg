@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700">
+  <style>
+    .box { fill:#f7f9fc; stroke:#2b2b2b; stroke-width:2 }
+    .pin { fill:#ffffff; stroke:#2b2b2b }
+    .label { font-family: Arial, Helvetica, sans-serif; font-size:14px; }
+    .title { font-family: Arial, Helvetica, sans-serif; font-size:20px; font-weight:bold }
+    .note { font-family: Arial, Helvetica, sans-serif; font-size:12px; fill:#333 }
+    .wire { stroke:#2b2b2b; stroke-width:2; fill:none }
+  </style>
+
+  <text x="20" y="30" class="title">Smart Home Automation - Circuit Diagram (ESP8266 / NodeMCU)</text>
+
+  <!-- Power supply -->
+  <rect x="20" y="60" width="200" height="120" class="box"/>
+  <text x="30" y="90" class="label">5V DC Adapter</text>
+  <text x="30" y="110" class="label">Input: AC mains (230V/110V)</text>
+  <circle cx="60" cy="150" r="6" class="pin"/>
+  <text x="75" y="155" class="label">+5V</text>
+  <circle cx="140" cy="150" r="6" class="pin"/>
+  <text x="155" y="155" class="label">GND</text>
+
+  <!-- NodeMCU -->
+  <rect x="260" y="60" width="240" height="220" class="box"/>
+  <text x="300" y="90" class="label">ESP8266 (NodeMCU)</text>
+  <text x="280" y="110" class="label">3.3V regulator onboard</text>
+
+  <!-- NodeMCU pins -->
+  <rect x="240" y="120" width="20" height="140" fill="#e9eef6" stroke="#2b2b2b"/>
+  <text x="210" y="140" class="label">D0</text>
+  <text x="210" y="160" class="label">D1 (GPIO5)</text>
+  <text x="210" y="180" class="label">D2 (GPIO4)</text>
+  <text x="210" y="200" class="label">D3 (GPIO0)</text>
+  <text x="210" y="220" class="label">D4 (GPIO2)</text>
+  <text x="210" y="240" class="label">A0 (ADC)</text>
+
+  <!-- Right-side pins -->
+  <rect x="500" y="120" width="20" height="140" fill="#e9eef6" stroke="#2b2b2b"/>
+  <text x="525" y="140" class="label">Vin</text>
+  <text x="525" y="160" class="label">3V3</text>
+  <text x="525" y="180" class="label">GND</text>
+  <text x="525" y="200" class="label">RST</text>
+
+  <!-- Wires from 5V to Vin and GND -->
+  <path d="M80 150 L240 150" class="wire"/>
+  <circle cx="240" cy="150" r="3" fill="#2b2b2b"/>
+  <path d="M140 150 L500 150" class="wire"/>
+  <circle cx="500" cy="150" r="3" fill="#2b2b2b"/>
+  <text x="300" y="140" class="label">+5V (to Vin)</text>
+  <text x="300" y="170" class="label">GND</text>
+
+  <!-- DHT sensor -->
+  <rect x="260" y="300" width="160" height="90" class="box"/>
+  <text x="280" y="325" class="label">DHT22 / DHT11</text>
+  <circle cx="320" cy="360" r="5" class="pin"/>
+  <text x="335" y="365" class="label">DATA</text>
+  <path d="M360 360 L500 240" class="wire"/>
+  <text x="370" y="340" class="label">DATA -> D4 (GPIO2)</text>
+  <path d="M320 350 L500 150" class="wire"/>
+
+  <!-- LDR Voltage divider -->
+  <rect x="20" y="210" width="200" height="110" class="box"/>
+  <text x="30" y="240" class="label">LDR (Light sensor) + 10k resistor</text>
+  <path d="M120 280 L240 280" class="wire"/>
+  <text x="250" y="285" class="label">To A0 (ADC)</text>
+  <path d="M250 285 L500 240" class="wire"/>
+
+  <!-- Relay module -->
+  <rect x="740" y="60" width="360" height="220" class="box"/>
+  <text x="760" y="90" class="label">Relay Module (3 or 4 channel)</text>
+
+  <!-- Relays and connections -->
+  <text x="760" y="120" class="label">Relay 1 IN -> D1</text>
+  <text x="760" y="140" class="label">Relay 2 IN -> D2</text>
+  <text x="760" y="160" class="label">Relay 3 IN -> D3</text>
+  <text x="760" y="180" class="label">VCC -> +5V, GND -> GND</text>
+
+  <path d="M420 150 L740 150" class="wire"/>
+  <text x="580" y="140" class="label">Control signals (IN pins)</text>
+
+  <!-- Appliances (AC mains) -->
+  <rect x="740" y="300" width="360" height="160" class="box"/>
+  <text x="760" y="325" class="label">AC Appliances (Lights, Fan, etc.)</text>
+  <text x="760" y="350" class="label">Connected through Relay COM -> NO</text>
+  <text x="760" y="375" class="label">Mains Live -> Relay COM; Relay NO -> Appliance Live</text>
+  <text x="760" y="400" class="label">NEVER connect mains to the microcontroller directly</text>
+
+  <!-- Wi-Fi / Cloud -->
+  <ellipse cx="420" cy="420" rx="120" ry="50" fill="#eef6ff" stroke="#2b2b2b"/>
+  <text x="360" y="415" class="label">Wi‑Fi / Cloud</text>
+  <text x="360" y="435" class="label">Smartphone App</text>
+  <path d="M420 320 L420 280" class="wire" stroke-dasharray="6,4"/>
+  <text x="430" y="300" class="label">Wi‑Fi (ESP8266)</text>
+
+  <!-- Legend and notes -->
+  <rect x="20" y="550" width="1120" height="120" fill="#fff6e6" stroke="#2b2b2b"/>
+  <text x="40" y="580" class="note">Components:</text>
+  <text x="40" y="600" class="note">- ESP8266 (NodeMCU) as controller</text>
+  <text x="40" y="620" class="note">- Relay module (3/4-channel) to switch AC mains to appliances</text>
+  <text x="350" y="600" class="note">- DHT11/DHT22 for temperature & humidity (DATA -> D4)</text>
+  <text x="350" y="620" class="note">- LDR as analog light sensor (voltage divider -> A0)</text>
+  <text x="650" y="600" class="note">Safety:</text>
+  <text x="650" y="620" class="note">- Make all mains wiring with proper insulation and follow local electrical codes.</text>
+  <text x="650" y="640" class="note">- Use opto-isolated relays or proper isolation when necessary.</text>
+</svg>
