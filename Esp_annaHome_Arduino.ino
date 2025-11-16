@@ -39,7 +39,6 @@ void setup() {
   rtc.begin();
   dht.begin();
   bmp.begin();
-
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Env Monitor");
@@ -174,4 +173,4 @@ void printAllDataToSerial() {
   Serial.println(" ");
 
 }
-
+// ---------------- END OF CODE ----------------
