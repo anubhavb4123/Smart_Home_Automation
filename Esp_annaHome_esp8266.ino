@@ -11,8 +11,8 @@
 const char* ssid = "BAJPAI_2.4Ghz";
 const char* password = "44444422";
 
-#define BOT_TOKEN "8001347460"
-#define ADMIN_CHAT_ID "1835992"
+#define BOT_TOKEN "8001347460:AAEfxOg4j-1vmLdZ35qYabMqPJ52hSsK72E"
+#define ADMIN_CHAT_ID "1839775992"
 #define LOGIN_PASSWORD "4123"
 
 // ====== Objects ======
@@ -22,10 +22,21 @@ UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 // ====== Serial Communication ======
 #define RX_PIN D6  // RX for ESP8266 (connect to TX of sensor board)
 #define TX_PIN D5  // TX for ESP8266 (connect to RX of sensor board)
+
 SoftwareSerial Serial2(RX_PIN, TX_PIN);
 
 // ====== LED Indicator ======
-#define LED_PIN LED_BUILTIN  // NodeMCU LED (Active LOW)
+#define LED_PIN 2
+#define FAN_PIN 15
+#define SWITCH_PIN 4 
+#define POWER_SOURCE_PIN D3  // choose a free pin connected to your detection circuit
+
+enum PowerSource { UNKNOWN, BATTERY, SUPPLY };
+PowerSource currentPowerSource = UNKNOWN;
+PowerSource lastPowerSource = UNKNOWN;
+
+unsigned long lastChangeTime = 0;   // when a potential change was first detected
+const unsigned long debounceDelay = 2000; // 2 seconds stability check
 
 // ====== Sensor Data (globals used across functions) ======
 String serialData = "";
@@ -33,9 +44,7 @@ int hourVal = 0, minuteVal = 0, secondVal = 0, dayVal = 0, monthVal = 0, yearVal
 float tDHT = 0.0, h = 0.0, tBHP = 0.0, p = 0.0, mqVal = 0.0;
 
 // ====== Alerts / Flags from sensor =========
-int LastHour = 0;
-int lowBatteryWarning = 0;
-int lowBatteryPercentage = 0;
+bool sentPoorAlert = false;
 
 // ====== Timers ======
 unsigned long lastBotCheck = 0;
@@ -51,8 +60,14 @@ std::map<String, String> guestNames;
 void setup() {
   Serial.begin(115200);
   Serial2.begin(9600); // from sensor board
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH); // LED OFF (active LOW)
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH); // LED OFF (active LOW)
+  pinMode(FAN_PIN, OUTPUT);
+  pinMode(SWITCH_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH);
+  digitalWrite(FAN_PIN, LOW);
+  digitalWrite(SWITCH_PIN, LOW);
 
   Serial.println("\n📶 Connecting to WiFi...");
   WiFi.mode(WIFI_STA);
@@ -61,9 +76,9 @@ void setup() {
 
   // LED blink while connecting
   while (WiFi.status() != WL_CONNECTED) {
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(LED_BUILTIN, LOW);
     delay(200);
-    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(LED_BUILTIN, HIGH);
     delay(200);
     Serial.print(".");
   }
@@ -72,8 +87,21 @@ void setup() {
   Serial.print("📡 IP: ");
   Serial.println(WiFi.localIP());
 
-  digitalWrite(LED_PIN, LOW); // LED ON (system running)
+  digitalWrite(LED_BUILTIN, LOW); // LED ON (system running)
   bot.sendMessage(ADMIN_CHAT_ID, "🚀 ESP8266 is online & ready!", "");
+
+  // Read initial power source
+  pinMode(POWER_SOURCE_PIN, INPUT); // HIGH: supply; LOW: battery
+
+  // Read initial power source
+  currentPowerSource = digitalRead(POWER_SOURCE_PIN) ? SUPPLY : BATTERY;
+  lastPowerSource = currentPowerSource;
+
+  // Log initial state
+  if (currentPowerSource == SUPPLY)
+    Serial.println("🔌 Power source: SUPPLY (external)");
+  else
+    Serial.println("🔋 Power source: BATTERY");
 }
 
 // ====== Helpers ======
@@ -121,7 +149,7 @@ void loop() {
   if (millis() - lastWiFiCheck > wifiCheckInterval) {
     if (WiFi.status() != WL_CONNECTED) {
       Serial.println("⚠️ WiFi Lost! Reconnecting...");
-      digitalWrite(LED_PIN, HIGH); // LED OFF while reconnecting
+      digitalWrite(LED_BUILTIN, HIGH); // LED OFF while reconnecting
       WiFi.begin(ssid, password);
       int retry = 0;
       while (WiFi.status() != WL_CONNECTED && retry < 20) {
@@ -132,11 +160,11 @@ void loop() {
       if (WiFi.status() == WL_CONNECTED) {
         Serial.println("\n✅ Reconnected!");
         bot.sendMessage(ADMIN_CHAT_ID, "🔁 WiFi reconnected!", "");
-        digitalWrite(LED_PIN, LOW); // LED ON
+        digitalWrite(LED_BUILTIN, LOW); // LED ON
       }
     }
-    lastWiFiCheck = millis();
-    Serial.println("🕒 Time: " + String(hourVal) + ":" + String(minuteVal) + ":" + String(secondVal));
+  lastWiFiCheck = millis();
+  Serial.println("🕒 Time: " + String(hourVal) + ":" + String(minuteVal) + ":" + String(secondVal));
   Serial.println("📅 Date: " + String(dayVal) + "/" + String(monthVal) + "/" + String(yearVal));
   Serial.println("🌡️ DHT Temp: " + String(tDHT, 1) + " °C");
   Serial.println("💧 Humidity: " + String(h, 1) + " %");
@@ -145,16 +173,39 @@ void loop() {
   Serial.println("🌫️ MQ135 Value: " + String((int)mqVal));
   }
 
-  // --- Notifications from sensor flags ---
-  if (lowBatteryWarning == 1) {
-    broadcastToLoggedIn("⚠️ Low Battery! " + String(lowBatteryPercentage) + "%");
-    lowBatteryWarning = 0;
+
+  // --- Power Source Change Detection ---
+    PowerSource newPower = digitalRead(POWER_SOURCE_PIN) ? SUPPLY : BATTERY;
+
+  // Check if reading is different from current
+  if (newPower != currentPowerSource) {
+    // Possible change detected — start timing
+    if (lastChangeTime == 0) {
+      lastChangeTime = millis();
+    }
+
+    // If stable for longer than debounce delay
+    if (millis() - lastChangeTime > debounceDelay) {
+      lastPowerSource = currentPowerSource;
+      currentPowerSource = newPower;
+      lastChangeTime = 0; // reset timer
+
+      // Prepare message
+      String msg;
+      if (currentPowerSource == SUPPLY)
+        msg = "🔌 Power source switched: Now running on SUPPLY (external power)!";
+      else
+        msg = "🔋 Power source switched: Now running on BATTERY!";
+
+      Serial.println(msg);          // Log to Serial
+      bot.sendMessage(ADMIN_CHAT_ID, msg, "");  // Send Telegram alert
+    }
+  } 
+  else {
+    // If reading matches current state, reset timer (no change)
+    lastChangeTime = 0;
   }
 
-  if (LastHour != 0) {
-    broadcastToLoggedIn("⏰ Hour " + String(LastHour) + " started!");
-    LastHour = 0;
-  }
 }
 
 // ====== Message Handling ======
@@ -176,20 +227,19 @@ void handleMessages(int num) {
         bot.sendMessage(chat_id, "👑 Admin already has full access.", "Markdown");
       }
       else if (pwd == LOGIN_PASSWORD) {
-        guestLoggedIn[chat_id] = true;
-        guestNames[chat_id] = senderName;
-        bot.sendMessage(chat_id, "✅ *Login successful!*", "Markdown");
+      guestLoggedIn[chat_id] = true;
+      guestNames[chat_id] = senderName;
+      bot.sendMessage(chat_id, "✅ *Login successful!*", "Markdown");
 
-        // Notify admin when a guest logs in
-        String adminMsg = "🔐 Guest logged in:\n";
-        adminMsg += senderName + " (" + chat_id + ")";
-        bot.sendMessage(ADMIN_CHAT_ID, adminMsg, "");
-        Serial.println("Admin notified: " + adminMsg);
+      // Notify admin when a guest logs in
+      String adminMsg = "🔐 Guest logged in:\n";
+      adminMsg += senderName + " (" + chat_id + ")";
+      bot.sendMessage(ADMIN_CHAT_ID, adminMsg, "");
+      Serial.println("Admin notified: " + adminMsg);
       }
       else {
         bot.sendMessage(chat_id, "❌ *Wrong password!* Try again.", "Markdown");
       }
-
       continue;
     }
 
@@ -197,21 +247,21 @@ void handleMessages(int num) {
     if (text == "/logout") {
       // Capture name before clearing
       if (!isAdmin){
-         String nameBefore = guestNames.count(chat_id) ? guestNames[chat_id] : senderName;
+        String nameBefore = guestNames.count(chat_id) ? guestNames[chat_id] : senderName;
 
-         guestLoggedIn[chat_id] = false;
-         guestNames[chat_id] = "";
-         bot.sendMessage(chat_id, "🔒 You are now logged out.", "Markdown");
+        guestLoggedIn[chat_id] = false;
+        guestNames[chat_id] = "";
+        bot.sendMessage(chat_id, "🔒 You are now logged out.", "Markdown");
 
-         // Notify admin when a guest (non-admin) logs out
-         String adminMsg = "🔓 Guest logged out:\n";
-         adminMsg += nameBefore + " (" + chat_id + ")";
-         bot.sendMessage(ADMIN_CHAT_ID, adminMsg, "");
-         Serial.println("Admin notified: " + adminMsg);
+        // Notify admin when a guest (non-admin) logs out
+        String adminMsg = "🔓 Guest logged out:\n";
+        adminMsg += nameBefore + " (" + chat_id + ")";
+        bot.sendMessage(ADMIN_CHAT_ID, adminMsg, "");
+        Serial.println("Admin notified: " + adminMsg);
         } else {
           bot.sendMessage(chat_id, "👑 Admin cannot logout (always has access).", "Markdown");
         }
-        continue;
+      continue;
     }
 
     // ----------- ADMIN / GUEST COMMANDS ----------
@@ -236,13 +286,29 @@ void processCommand(String chat_id, String text) {
     msg += "MQ135 -> Air Quality Value: " + String(mqVal) + "\n";
     bot.sendMessage(chat_id, msg, "Markdown");
   }
-  else if (text == "/on") {
+  else if (text == "/ledon") {
     digitalWrite(LED_PIN, LOW);
     bot.sendMessage(chat_id, "💡 LED *ON*", "Markdown");
   }
-  else if (text == "/off") {
+  else if (text == "/ledoff") {
     digitalWrite(LED_PIN, HIGH);
     bot.sendMessage(chat_id, "💡 LED *OFF*", "Markdown");
+  }
+  else if (text =="/fanon"){
+    digitalWrite(FAN_PIN,HIGH);
+    bot.sendMessage(chat_id, " Fan *ON*", "Markdown");
+  }
+  else if (text =="/fanoff"){
+    digitalWrite(FAN_PIN,LOW);
+    bot.sendMessage(chat_id, "Fan *OFF*", "Markdown");
+  }
+  else if (text =="/switchon"){
+    digitalWrite(SWITCH_PIN, HIGH);
+    bot.sendMessage(chat_id, " Switch *ON*", "Markdown");
+  }
+  else if (text =="/switchoff"){
+    digitalWrite(SWITCH_PIN,LOW);
+    bot.sendMessage(chat_id, "switch *OFF*", "Markdown");
   }
   else if (text == "/whoami") {
     if (chat_id == ADMIN_CHAT_ID)
@@ -256,8 +322,12 @@ void processCommand(String chat_id, String text) {
     bot.sendMessage(chat_id,
       "🤖 *Commands:*\n"
       "/status → Sensor data\n"
-      "/on → Turn LED on\n"
-      "/off → Turn LED off\n"
+      "/ledon → Turn LED on\n"
+      "/ledoff → Turn LED off\n"
+      "/fanon → Turn FAN on\n"
+      "/fanoff → Turn FAN off\n"
+      "/switchon → Turn SWITCH on\n"
+      "/switchoff → Turn SWITCH off\n"
       "/login pwd → Guest login\n"
       "/logout → Logout\n"
       "/whoami → Check role\n"
@@ -297,57 +367,43 @@ void processCommand(String chat_id, String text) {
 void parseSensorData(String data) {
   Serial.println("📩 Received: " + data);
 
-  // Temporary parsed variables
-  int phour=0, pminute=0, psecond=0, pday=0, pmonth=0, pyear=0;
-  float ptDHT=0, phum=0, ptBMP=0, ppress=0;
-  int pmq = 0;
-  int plowBatteryFlag = 0;
-  int plowBatteryPct = 0;
-  int pLastHour = 0;
+  // Split data by ';'
+  String parts[20];
+  int idx = 0;
 
-  // Example expected incoming format (semicolon separated):
-  // hour;minute;second;day;month;year;dhtTemp;humidity;bmpTemp;pressure;mq;lowBatteryFlag;lowBatteryPct;lastHour
-  // But your original sscanf had 11 fields. Adjust as per what your sensor sends.
-  // We'll try to parse up to 11-14 values safely using sscanf.
-  // This sscanf expects at least 11 fields. If you send extra fields, they'll be parsed too if format matches.
-  int parsed = sscanf(data.c_str(),
-                      "%d;%d;%d;%d;%d;%d;%f;%f;%f;%f;%d;%d;%d;%d",
-                      &phour, &pminute, &psecond, &pday, &pmonth, &pyear,
-                      &ptDHT, &phum, &ptBMP, &ppress, &pmq,
-                      &plowBatteryFlag, &plowBatteryPct, &pLastHour);
-
-  // If parse failed (parsed < 11) try a fallback with only first 11 fields
-  if (parsed < 11) {
-    parsed = sscanf(data.c_str(),
-                    "%d;%d;%d;%d;%d;%d;%f;%f;%f;%f;%d",
-                    &phour, &pminute, &psecond, &pday, &pmonth, &pyear,
-                    &ptDHT, &phum, &ptBMP, &ppress, &pmq);
-    // reset optional flags if not provided
-    plowBatteryFlag = 0;
-    plowBatteryPct = 0;
-    pLastHour = 0;
+  while (data.length() && idx < 20) {
+    int p = data.indexOf(';');
+    if (p == -1) {
+      parts[idx++] = data;
+      break;
+    }
+    parts[idx++] = data.substring(0, p);
+    data = data.substring(p + 1);
   }
 
-  // Assign parsed values into globals
-  hourVal = phour;
-  minuteVal = pminute;
-  secondVal = psecond;
-  dayVal = pday;
-  monthVal = pmonth;
-  yearVal = pyear;
+  // Assign values safely
+  if (idx >= 11) {
+    hourVal   = parts[0].toInt();
+    minuteVal = parts[1].toInt();
+    secondVal = parts[2].toInt();
+    dayVal    = parts[3].toInt();
+    monthVal  = parts[4].toInt();
+    yearVal   = parts[5].toInt();
 
-  tDHT = ptDHT;
-  h = phum;
-  tBHP = ptBMP;
-  p = ppress;
-  mqVal = pmq;
+    tDHT  = parts[6].toFloat();
+    h     = parts[7].toFloat();
+    tBHP  = parts[8].toFloat();
+    p     = parts[9].toFloat();
 
-  // Optional flags
-  lowBatteryWarning = plowBatteryFlag;
-  lowBatteryPercentage = plowBatteryPct;
-  LastHour = pLastHour;
+    mqVal = parts[10].toInt();
 
-  // Print parsed data for confirmation
+    // Optional flags (Arduino may or may not send them)
+    //lowBatteryWarning    = (idx > 11) ? parts[11].toInt() : 0;
+    //lowBatteryPercentage = (idx > 12) ? parts[12].toInt() : 0;
+    //LastHour             = (idx > 13) ? parts[13].toInt() : 0;
+  }
+
+  // Print parsed data
   Serial.println("🕒 Time: " + String(hourVal) + ":" + String(minuteVal) + ":" + String(secondVal));
   Serial.println("📅 Date: " + String(dayVal) + "/" + String(monthVal) + "/" + String(yearVal));
   Serial.println("🌡️ DHT Temp: " + String(tDHT, 1) + " °C");
@@ -355,8 +411,34 @@ void parseSensorData(String data) {
   Serial.println("🌡️ BMP Temp: " + String(tBHP, 1) + " °C");
   Serial.println("🧭 Pressure: " + String(p, 1) + " hPa");
   Serial.println("🌫️ MQ135 Value: " + String((int)mqVal));
-  if (lowBatteryWarning) Serial.println("⚠️ Low battery flag from sensor: " + String(lowBatteryPercentage) + "%");
-  if (LastHour) Serial.println("⏰ Sensor sent LastHour: " + String(LastHour));
+
+  // ===== Air Quality Check =====
+  if (mqVal >= 700) {
+
+    // Send alert only once
+    if (!sentPoorAlert) {
+     String msg = "⚠️ *Poor Air Quality Detected!*\n"
+                 "MQ135 Value: " + String((int)mqVal) + "\n"
+                 "Status: *Poor*";
+
+      // Send to admin
+     bot.sendMessage(ADMIN_CHAT_ID, msg, "Markdown");
+
+      // Send to all logged-in guests
+      for (auto &u : guestLoggedIn) {
+        if (u.second) {
+        bot.sendMessage(u.first, msg, "Markdown");
+     }
+    }
+
+      Serial.println("🚨 Poor air quality alert sent!");
+      sentPoorAlert = true;  // stop repeated alerts
+    }
+  }
+  else {
+    // Reset alert so we can send again when it becomes poor next time
+    sentPoorAlert = false;
+  }
 }
 
 // ====== Broadcast Message to Admin + All logged-in guests ======
