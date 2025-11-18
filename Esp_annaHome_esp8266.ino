@@ -1,5 +1,5 @@
 // =========================================================
-// ESP8266 — Full merged code
+// ESP8266 — Full merged code (updated)
 // Features:
 //  - Safe serial parsing using <...> packets
 //  - Telegram bot (admin + guest login system)
@@ -7,6 +7,7 @@
 //  - Power-source detection with debounce and admin alert
 //  - WiFi auto-reconnect
 //  - Broadcast helper
+//  - New admin-only commands: /remove <chat_id>, /addguest <chat_id> <name>
 // =========================================================
 
 #include <ESP8266WiFi.h>
@@ -33,10 +34,10 @@ UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 SoftwareSerial Serial2(RX_PIN, TX_PIN);
 
 // ====== GPIO ======
-#define LED_PIN 2
-#define FAN_PIN 15
-#define SWITCH_PIN 4
-#define POWER_SOURCE_PIN D3  // HIGH: supply; LOW: battery
+#define LED_PIN D1
+#define FAN_PIN D2
+#define SWITCH_PIN D3
+#define POWER_SOURCE_PIN D7  // HIGH: supply; LOW: battery
 
 enum PowerSource { UNKNOWN, BATTERY, SUPPLY };
 PowerSource currentPowerSource = UNKNOWN;
@@ -53,6 +54,10 @@ int hourVal = 0, minuteVal = 0, secondVal = 0;
 int dayVal = 0, monthVal = 0, yearVal = 0;
 float tDHT = 0.0, h = 0.0, tBHP = 0.0, pVal = 0.0;
 float mqVal = 0.0;
+
+// ====== Morning broadcast tracking ======
+int lastMorningSentDay = -1;    // day number when 6:30 message was last sent (prevents repeats)
+bool morningBroadcastEnabled = true; // flip to false to disable feature quickly
 
 // ====== Alerts / Flags from sensor =========
 bool sentPoorAlert = false;
@@ -73,6 +78,7 @@ void handleMessages(int num);
 void processCommand(String chat_id, String text);
 String getSenderName(int msgIndex, const String &fallbackChatId);
 void broadcastToLoggedIn(String msg);
+bool isValidChatId(const String &s);
 
 // ====== Setup ======
 void setup() {
@@ -84,7 +90,7 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   pinMode(FAN_PIN, OUTPUT);
   pinMode(SWITCH_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH); // LED off
+  digitalWrite(LED_PIN, LOW); // LED off
   digitalWrite(FAN_PIN, LOW);
   digitalWrite(SWITCH_PIN, LOW);
 
@@ -111,7 +117,7 @@ void setup() {
 
   // Read initial power source
   pinMode(POWER_SOURCE_PIN, INPUT); // HIGH: supply; LOW: battery
-  currentPowerSource = digitalRead(POWER_SOURCE_PIN) ? SUPPLY : BATTERY;
+  currentPowerSource = digitalRead(POWER_SOURCE_PIN) ? BATTERY : SUPPLY;
   lastPowerSource = currentPowerSource;
   if (currentPowerSource == SUPPLY) Serial.println("🔌 Power source: SUPPLY (external)");
   else Serial.println("🔋 Power source: BATTERY");
@@ -182,35 +188,57 @@ void loop() {
   }
 
   // --- Power Source Change Detection ---
-  PowerSource newPower = digitalRead(POWER_SOURCE_PIN) ? SUPPLY : BATTERY;
+ // --- Power Source Change Detection ---
+ PowerSource newPower = digitalRead(POWER_SOURCE_PIN) ? BATTERY : SUPPLY;
 
-  if (newPower != currentPowerSource) {
-    if (lastChangeTime == 0) lastChangeTime = millis();
+if (newPower != currentPowerSource) {
 
-    if (millis() - lastChangeTime > debounceDelay) {
-      lastPowerSource = currentPowerSource;
-      currentPowerSource = newPower;
-      lastChangeTime = 0;
+  if (lastChangeTime == 0)
+    lastChangeTime = millis();
 
-      String msg;
-      if (currentPowerSource == SUPPLY)
-        msg = "🔌 Power source switched: Now running on GRID !";
-      else
-        msg = "🔋 Power source switched: Now running on INVERTER !";
+  if (millis() - lastChangeTime > debounceDelay) {
 
-      Serial.println(msg);          // Log to Serial
-      bot.sendMessage(ADMIN_CHAT_ID, msg, "");  // Send Telegram alert
-      // Send alert to logged-in guests
-      for (auto &u : guestLoggedIn) {
-        if (u.second) {
-          bot.sendMessage(u.first, msg, "Markdown");
-        }
+    lastPowerSource = currentPowerSource;
+    currentPowerSource = newPower;
+    lastChangeTime = 0;
+
+    String msg;
+    if (currentPowerSource == SUPPLY)
+      msg = "🔌 Power source switched: Now HOME on *GRID* !";
+    else
+      msg = "🔋 Power source switched: Now HOME on *INVERTER* !";
+
+    Serial.println(msg);
+    bot.sendMessage(ADMIN_CHAT_ID, msg, "Markdown");
+
+    // Send alert to logged-in guests
+    for (auto &u : guestLoggedIn) {
+      if (u.second) {
+        bot.sendMessage(u.first, msg, "Markdown");
       }
     }
-  } 
-  else {
-    lastChangeTime = 0;
   }
+}
+else {
+  lastChangeTime = 0;
+}
+
+  // --- Daily 6:30 AM Morning Broadcast ---
+  // Send once when time reaches 06:30 and hasn't been sent today
+  if (morningBroadcastEnabled && yearVal > 2000) { // ensure we have a valid parsed date/time
+    if (hourVal == 6 && minuteVal == 30) {
+      // If lastMorningSentDay differs from today's dayVal -> send
+      if (lastMorningSentDay != dayVal) {
+        sendMorningSensorBroadcast();
+        lastMorningSentDay = dayVal;
+      }
+    } else {
+      // reset guard when minute passes (keeps it ready for next day)
+      // (optional) we don't clear lastMorningSentDay here because it holds the day we sent
+    }
+  }
+
+
 }
 
 // ====== Message Handling ======
@@ -287,6 +315,20 @@ void handleMessages(int num) {
   }
 }
 
+// ====== Validate chat_id format (digits with optional leading '-') ======
+bool isValidChatId(const String &s) {
+  if (s.length() == 0) return false;
+  int start = 0;
+  if (s.charAt(0) == '-') {
+    if (s.length() == 1) return false;
+    start = 1;
+  }
+  for (int i = start; i < s.length(); i++) {
+    if (!isDigit(s.charAt(i))) return false;
+  }
+  return true;
+}
+
 // ====== Command Processor ======
 void processCommand(String chat_id, String text) {
   if (text == "/status") {
@@ -296,60 +338,85 @@ void processCommand(String chat_id, String text) {
     msg += "DHT11 -> Temp: " + String(tDHT, 1) + " °C, Humidity: " + String(h, 1) + " %\n";
     msg += "BMP180 -> Temp: " + String(tBHP, 1) + " °C, Pressure: " + String(pVal, 1) + " hPa\n";
     msg += "MQ135 -> Air Quality Value: " + String((int)mqVal) + "\n";
-    bot.sendMessage(chat_id, msg, "Markdown");
+    msg += "HOME Power Source: ";
+    if (currentPowerSource == SUPPLY)
+      msg += "🔌 GRID (external)\n";
+    else if (currentPowerSource == BATTERY)
+      msg += "🔋 INVERTER\n";
+    else
+      msg += "❓ UNKNOWN\n";
+      bot.sendChatAction(chat_id, "typing");
+      bot.sendMessage(chat_id, msg, "Markdown");
   }
   else if (text == "/ledon") {
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(LED_PIN, HIGH);
+    bot.sendChatAction(chat_id, "typing");
     bot.sendMessage(chat_id, "💡 LED *ON*", "Markdown");
   }
   else if (text == "/ledoff") {
-    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(LED_PIN, LOW);
+    bot.sendChatAction(chat_id, "typing");
     bot.sendMessage(chat_id, "💡 LED *OFF*", "Markdown");
   }
   else if (text == "/fanon") {
     digitalWrite(FAN_PIN, HIGH);
+    bot.sendChatAction(chat_id, "typing");
     bot.sendMessage(chat_id, "Fan *ON*", "Markdown");
   }
   else if (text == "/fanoff") {
     digitalWrite(FAN_PIN, LOW);
+    bot.sendChatAction(chat_id, "typing");
     bot.sendMessage(chat_id, "Fan *OFF*", "Markdown");
   }
   else if (text == "/switchon") {
     digitalWrite(SWITCH_PIN, HIGH);
+    bot.sendChatAction(chat_id, "typing");
     bot.sendMessage(chat_id, "Switch *ON*", "Markdown");
   }
   else if (text == "/switchoff") {
     digitalWrite(SWITCH_PIN, LOW);
+    bot.sendChatAction(chat_id, "typing");
     bot.sendMessage(chat_id, "Switch *OFF*", "Markdown");
   }
   else if (text == "/whoami") {
-    if (chat_id == ADMIN_CHAT_ID)
-      bot.sendMessage(chat_id, "👑 You are *Admin*", "Markdown");
-    else if (guestLoggedIn.count(chat_id) && guestLoggedIn[chat_id])
-      bot.sendMessage(chat_id, "🧑‍🚀 You are *Guest*", "Markdown");
-    else
-      bot.sendMessage(chat_id, "🕵️‍♂️ Not logged in", "Markdown");
+    if (chat_id == ADMIN_CHAT_ID){
+        bot.sendChatAction(chat_id, "typing");
+      bot.sendMessage(chat_id, "👑 You are *Admin*", "Markdown");}
+    else if (guestLoggedIn.count(chat_id) && guestLoggedIn[chat_id]){
+         bot.sendChatAction(chat_id, "typing");
+         bot.sendMessage(chat_id, "🧑‍🚀 You are *Guest*", "Markdown");
+        }
+    else {
+        bot.sendChatAction(chat_id, "typing");
+        bot.sendMessage(chat_id, "🕵️‍♂️ Not logged in", "Markdown");}
   }
   else if (text == "/help") {
-    bot.sendMessage(chat_id,
+     bot.sendChatAction(chat_id, "typing");
+     bot.sendMessage(chat_id,
       "🤖 *Commands:*\n"
-      "/status → Sensor data\n"
-      "/ledon → Turn LED on\n"
-      "/ledoff → Turn LED off\n"
-      "/fanon → Turn FAN on\n"
-      "/fanoff → Turn FAN off\n"
-      "/switchon → Turn SWITCH on\n"
-      "/switchoff → Turn SWITCH off\n"
-      "/login pwd → Guest login\n"
-      "/logout → Logout\n"
-      "/whoami → Check role\n"
-      "/logins → Show currently logged-in guests",
+     "/status → Sensor data\n"
+     "/ledon → Turn LED on\n"
+     "/ledoff → Turn LED off\n"
+     "/fanon → Turn FAN on\n"
+     "/fanoff → Turn FAN off\n"
+     "/switchon → Turn main switch on\n"
+     "/switchoff → Turn main switch off\n"
+     "/login <password> → Guest login\n"
+     "/logout → Logout from guest mode\n"
+     "/whoami → Check whether you are Admin/Guest/Unknown\n"
+     "/help → Show all commands\n"
+     "/logins → Show currently logged-in guests (Admin only)\n"
+     "/listlogins → Same as /logins (Admin only)\n"
+     "/remove <chat_id> → Remove/log out a guest (Admin only)\n"
+     "/addguest <chat_id> <name> → Add and auto-login a guest (Admin only)\n"
+     "/broadcast <message> → Broadcast message to all logged-in guests (Admin only)",
       "Markdown");
-  }
+    }
   // ----- New admin-only command: list current logins -----
   else if (text == "/logins" || text == "/listlogins") {
     // Ensure only admin can call this
     if (chat_id != ADMIN_CHAT_ID) {
+        bot.sendChatAction(chat_id, "typing");
       bot.sendMessage(chat_id, "🚫 Only the admin can use this command.", "Markdown");
       return;
     }
@@ -368,9 +435,224 @@ void processCommand(String chat_id, String text) {
       msg += "_None_\n";
     }
     msg += "\n*Total:* " + String(count);
+    bot.sendChatAction(chat_id, "typing");
     bot.sendMessage(chat_id, msg, "Markdown");
   }
+  // ----- Admin-only: remove a guest by chat_id -----
+  else if (text.startsWith("/remove")) {
+    if (chat_id != ADMIN_CHAT_ID) {
+        bot.sendChatAction(chat_id, "typing");
+      bot.sendMessage(chat_id, "🚫 Only the admin can use this command.", "Markdown");
+      return;
+    }
+
+    // Usage: /remove <chat_id>
+    String param = "";
+    if (text.length() > 7) {
+      // could be "/remove " + id
+      param = text.substring(7);
+    }
+    param.trim();
+
+    if (param.length() == 0) {
+        bot.sendChatAction(chat_id, "typing");
+      bot.sendMessage(chat_id, "❗ Usage: /remove <chat_id>", "Markdown");
+      return;
+    }
+
+    if (!isValidChatId(param)) {
+        bot.sendChatAction(chat_id, "typing");
+      bot.sendMessage(chat_id, "❗ Invalid chat_id format.", "Markdown");
+      return;
+    }
+
+    String target = param;
+    bool wasLoggedIn = guestLoggedIn.count(target) ? guestLoggedIn[target] : false;
+
+    if (wasLoggedIn) {
+      guestLoggedIn[target] = false;
+      guestNames[target] = "";
+      bot.sendChatAction(chat_id, "typing");
+      bot.sendMessage(chat_id, "Guest removed successfully.", "Markdown");
+
+      // Attempt to notify the guest
+      bot.sendChatAction(target, "typing");
+      bot.sendMessage(target, "🔒 You have been logged out by admin.", "Markdown");
+    } else {
+        bot.sendChatAction(chat_id, "typing");
+      bot.sendMessage(chat_id, "Guest is not logged in.", "Markdown");
+    }
+  }
+  // ----- Admin-only: add guest (id + name) -----
+  else if (text.startsWith("/addguest")) {
+    if (chat_id != ADMIN_CHAT_ID) {
+        bot.sendChatAction(chat_id, "typing");
+      bot.sendMessage(chat_id, "🚫 Only the admin can use this command.", "Markdown");
+      return;
+    }
+
+    // Expected: /addguest <chat_id> <name...>
+    String rest = "";
+    if (text.length() > 9) {
+      rest = text.substring(9);
+    }
+    rest.trim();
+
+    if (rest.length() == 0) {
+        bot.sendChatAction(chat_id, "typing");
+      bot.sendMessage(chat_id, "❗ Usage: /addguest <chat_id> <name>", "Markdown");
+      return;
+    }
+
+    int sp = rest.indexOf(' ');
+    if (sp == -1) {
+        bot.sendChatAction(chat_id, "typing");
+        bot.sendMessage(chat_id, "❗ Usage: /addguest <chat_id> <name>", "Markdown");
+        return;
+    }
+
+    String target = rest.substring(0, sp);
+    String name = rest.substring(sp + 1);
+    target.trim();
+    name.trim();
+
+    if (!isValidChatId(target)) {
+      bot.sendChatAction(chat_id, "typing");
+      bot.sendMessage(chat_id, "❗ Invalid chat_id format.", "Markdown");
+      return;
+    }
+
+    if (name.length() == 0) {
+        bot.sendChatAction(chat_id, "typing");
+      bot.sendMessage(chat_id, "❗ Missing name. Usage: /addguest <chat_id> <name>", "Markdown");
+      return;
+    }
+
+    guestLoggedIn[target] = true;
+    guestNames[target] = name;
+    bot.sendChatAction(chat_id, "typing");
+    bot.sendMessage(chat_id, "Guest added and logged in successfully.", "Markdown");
+    // Notify the guest
+    bot.sendChatAction(target, "typing");
+    bot.sendMessage(target, "👋 You were added as a guest by the admin.", "Markdown");
+  }
+  else if (text.startsWith("/broadcast ")) {
+
+    if (chat_id != ADMIN_CHAT_ID) {
+      bot.sendMessage(chat_id, "🚫 Only admin can broadcast.", "Markdown");
+      return;
+    }
+
+    String msg = text.substring(11);
+    msg.trim();
+
+    if (msg.length() == 0) {
+      bot.sendMessage(chat_id, "❗ Usage: /broadcast <message>", "Markdown");
+      return;
+    }
+
+    int sent = 0;
+    for (auto &entry : guestLoggedIn) {
+      if (entry.second) {
+        bot.sendMessage(entry.first, msg, "Markdown");
+        sent++;
+      }
+    }
+
+    bot.sendMessage(chat_id, "📣 Broadcast sent to " + String(sent) + " guests.", "Markdown");
+  }
+  // ===== Guests send message to Admin =====
+else if (text.startsWith("/send ")) {
+
+    // Only guests (NOT admin)
+    if (chat_id == ADMIN_CHAT_ID) {
+        bot.sendMessage(chat_id, "👑 Admin cannot use /send. This is for guests only.", "Markdown");
+        return;
+    }
+
+    // Must be logged in
+    if (!(guestLoggedIn.count(chat_id) && guestLoggedIn[chat_id])) {
+        bot.sendMessage(chat_id, "🚫 You must login to send a message to admin.\nUse /login <password>", "Markdown");
+        return;
+    }
+
+    bot.sendChatAction(chat_id, "typing");
+    delay(300);
+
+    // Extract message after /send 
+    String guestMsg = text.substring(6);
+    guestMsg.trim();
+
+    if (guestMsg.length() == 0) {
+        bot.sendMessage(chat_id, "❗ Usage: /send <your message>", "Markdown");
+        return;
+    }
+
+    // Prepare message for admin
+    String finalMsg = 
+        "📨 *New message from Guest*\n\n"
+        "👤 Name: " + (guestNames.count(chat_id) ? guestNames[chat_id] : "Unknown") + "\n"
+        "🆔 Chat ID: " + chat_id + "\n\n"
+        "💬 *Message:*\n" + guestMsg;
+
+    // Send to admin
+    bot.sendMessage(ADMIN_CHAT_ID, finalMsg, "Markdown");
+
+    // Confirm to guest
+    bot.sendMessage(chat_id, "📩 Your message has been sent to Admin!", "Markdown");
+}
+// ===== Admin reply to specific guest =====
+else if (text.startsWith("/reply ")) {
+
+    // Only admin allowed
+    if (chat_id != ADMIN_CHAT_ID) {
+        bot.sendMessage(chat_id, "🚫 Only Admin can use /reply.", "Markdown");
+        return;
+    }
+
+    // Extract arguments: /reply <chat_id> <message>
+    String rest = text.substring(7);
+    rest.trim();
+
+    int sp = rest.indexOf(' ');
+    if (sp == -1) {
+        bot.sendMessage(chat_id, "❗ Usage: /reply <chat_id> <message>", "Markdown");
+        return;
+    }
+
+    String targetId = rest.substring(0, sp);
+    String messageToGuest = rest.substring(sp + 1);
+
+    targetId.trim();
+    messageToGuest.trim();
+
+    // Validate chat_id
+    if (!isValidChatId(targetId)) {
+        bot.sendMessage(chat_id, "❗ Invalid chat_id format.", "Markdown");
+        return;
+    }
+
+    if (messageToGuest.length() == 0) {
+        bot.sendMessage(chat_id, "❗ Message cannot be empty.\nUse: /reply <id> <message>", "Markdown");
+        return;
+    }
+
+    bot.sendChatAction(chat_id, "typing");
+    delay(250);
+
+    // Send message to guest
+    bot.sendMessage(targetId, "📩 *Admin Message:*\n" + messageToGuest, "Markdown");
+
+    // Confirmation for admin
+    String conf = 
+        "✅ Message sent to guest:\n"
+        "🆔 " + targetId + "\n\n"
+        "💬 *Message:*\n" + messageToGuest;
+
+    bot.sendMessage(chat_id, conf, "Markdown");
+}
   else {
+    bot.sendChatAction(chat_id, "typing");
     bot.sendMessage(chat_id, "❓ Unknown command! Send /help");
   }
 }
@@ -387,7 +669,7 @@ void parseSensorData(String data) {
     if (data[i] == ';') sepCount++;
   }
 
-  // Expecting EXACTLY 10 semicolons for 11 values
+  // Expecting EXACTLY 10 semicolons (11 values)
   if (sepCount < 10) {
     Serial.println("❌ ERROR: Corrupted/Incomplete packet. Ignored.");
     return;
@@ -417,7 +699,7 @@ void parseSensorData(String data) {
   }
 
   // ==============================
-  // 3️⃣ ASSIGN VALUES
+  // 3️⃣ ASSIGN VALUES CLEANLY
   // ==============================
   hourVal   = parts[0].toInt();
   minuteVal = parts[1].toInt();
@@ -432,7 +714,7 @@ void parseSensorData(String data) {
   mqVal     = parts[10].toFloat();
 
   // ==============================
-  // 4️⃣ PRINT CLEAN VALUES
+  // 4️⃣ PRINT UPDATED VALUES
   // ==============================
   Serial.println("🕒 Time: " + String(hourVal) + ":" + String(minuteVal) + ":" + String(secondVal));
   Serial.println("📅 Date: " + String(dayVal) + "/" + String(monthVal) + "/" + String(yearVal));
@@ -447,6 +729,7 @@ void parseSensorData(String data) {
   // ==============================
   if (mqVal >= 700) {
     if (!sentPoorAlert) {
+
       String msg =
         "⚠️ *Poor Air Quality Detected!*\n"
         "MQ135 Value: " + String((int)mqVal) + "\n"
@@ -465,10 +748,16 @@ void parseSensorData(String data) {
       Serial.println("🚨 Poor air quality alert sent!");
       sentPoorAlert = true;
     }
-  }
+  } 
   else {
-    sentPoorAlert = false;  // Reset so next alert can be sent
+    sentPoorAlert = false;  // reset for next alert
   }
+}
+
+// ====== Show 'typing...' action ======
+void showTyping(String chat_id) {
+  bot.sendChatAction(chat_id, "typing");
+  delay(350);  // best balance for visible typing
 }
 
 // ====== Broadcast Message to Admin + All logged-in guests ======
@@ -479,4 +768,27 @@ void broadcastToLoggedIn(String msg) {
       bot.sendMessage(u.first, msg, "");
     }
   }
+}
+// Build sensor summary string and broadcast at 6:30
+void sendMorningSensorBroadcast() {
+  // Build sensor snapshot string (single-line friendly)
+  String snapshot = "🌅 Good morning!\n\n";
+  snapshot += "📊 Today's sensor reading is:\n";
+  snapshot += "Time: " + String(hourVal) + ":" + String(minuteVal) + ":"+ "00" + "\n";
+  snapshot += "Date: " + String(dayVal) + "/" + String(monthVal) + "/" + String(yearVal) + "\n";
+  snapshot += "DHT11 -> Temp: " + String(tDHT, 1) + " °C, Humidity: " + String(h, 1) + " %\n";
+  snapshot += "BMP180 -> Temp: " + String(tBHP, 1) + " °C, Pressure: " + String(pVal, 1) + " hPa\n";
+  snapshot += "MQ135 -> Air Quality Value: " + String((int)mqVal) + "\n";
+  snapshot += "HOME Power Source: ";
+    if (currentPowerSource == SUPPLY)
+      snapshot += "🔌 GRID (external)\n";
+    else if (currentPowerSource == BATTERY)
+      snapshot += "🔋 INVERTER\n";
+    else
+      snapshot += "❓ UNKNOWN\n";
+  snapshot += "Have a good day!";
+
+  // Use existing broadcast helper to send to admin + guests
+  broadcastToLoggedIn(snapshot);
+  Serial.println("✅ Morning broadcast sent.");
 }
