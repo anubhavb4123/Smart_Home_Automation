@@ -57,7 +57,9 @@ float mqVal = 0.0;
 
 // ====== Morning broadcast tracking ======
 int lastMorningSentDay = -1;    // day number when 6:30 message was last sent (prevents repeats)
+int lastNightSentDay = -1;    // day number when 12:00 AM message was last sent (prevents repeats)
 bool morningBroadcastEnabled = true; // flip to false to disable feature quickly
+bool nightBroadcastEnabled = true; // flip to false to disable feature quickly
 
 // ====== Alerts / Flags from sensor =========
 bool sentPoorAlert = false;
@@ -237,6 +239,19 @@ else {
       // (optional) we don't clear lastMorningSentDay here because it holds the day we sent
     }
   }
+  // --- Daily 00:00 AM Morning Broadcast ---
+  if (nightBroadcastEnabled && yearVal > 2000) { // ensure we have a valid parsed date/time
+    if (hourVal == 0 && minuteVal == 00) {
+      // If lastNightSentDay differs from today's dayVal -> send
+      if (lastNightSentDay != dayVal) {
+        sendNightSensorBroadcast();
+        lastNightSentDay = dayVal;
+      }
+    } else {
+      // reset guard when minute passes (keeps it ready for next day)
+      // (optional) we don't clear lastNightSentDay here because it holds the day we sent
+    }
+  }
 
 
 }
@@ -252,7 +267,7 @@ String getSenderName(int msgIndex, const String &fallbackChatId) {
 void handleMessages(int num) {
   for (int i = 0; i < num; i++) {
     String chat_id = bot.messages[i].chat_id;
-    String text = bot.messages[i].text;
+    String text = bot.messages[i].text; 
 
     // Get a friendly name for the sender (fallback to chat id)
     String senderName = getSenderName(i, chat_id);
@@ -786,9 +801,32 @@ void sendMorningSensorBroadcast() {
       snapshot += "🔋 INVERTER\n";
     else
       snapshot += "❓ UNKNOWN\n";
-  snapshot += "Have a good day!";
+      snapshot += "Have a good day!";
 
   // Use existing broadcast helper to send to admin + guests
   broadcastToLoggedIn(snapshot);
   Serial.println("✅ Morning broadcast sent.");
+}
+
+// Build sensor summary string and broadcast at 12:00 AM
+void sendNightSensorBroadcast() {
+  String snapshot = "GOOD NIGHT!\n\n";
+  snapshot += "📊 Today's sensor reading is:\n";
+  snapshot += "Time: " + String(hourVal) + ":" + String(minuteVal) + ":"+ "00" + "\n";
+  snapshot += "Date: " + String(dayVal) + "/" + String(monthVal) + "/" + String(yearVal) + "\n";
+  snapshot += "DHT11 -> Temp: " + String(tDHT, 1) + " °C, Humidity: " + String(h, 1) + " %\n";
+  snapshot += "BMP180 -> Temp: " + String(tBHP, 1) + " °C, Pressure: " + String(pVal, 1) + " hPa\n";
+  snapshot += "MQ135 -> Air Quality Value: " + String((int)mqVal) + "\n";
+  snapshot += "HOME Power Source: ";
+    if (currentPowerSource == SUPPLY)
+      snapshot += "🔌 GRID (external)\n";
+    else if (currentPowerSource == BATTERY)
+      snapshot += "🔋 INVERTER\n";
+    else
+      snapshot += "❓ UNKNOWN\n";
+      snapshot += "Have a good night!";
+
+  // Use existing broadcast helper to send to admin + guests
+  broadcastToLoggedIn(snapshot);
+  Serial.println("✅ Night broadcast sent.");
 }
