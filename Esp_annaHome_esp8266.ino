@@ -20,9 +20,9 @@
 const char* ssid = "BAJPAI_2.4Ghz";
 const char* password = "44444422";
 
-#define BOT_TOKEN "8001347460:AAEfxOg4j-1vmLdZ35qYabMqPJ52hSsK72E"
-#define ADMIN_CHAT_ID "1839775992"
-#define LOGIN_PASSWORD "4123"
+#define BOT_TOKEN "8001347460:AxOg4j-1vmbM52hSsK72E"
+#define ADMIN_CHAT_ID "18352"
+#define LOGIN_PASSWORD "423"
 
 // ====== Objects ======
 WiFiClientSecure secured_client;
